@@ -13,3 +13,4 @@ dist
 .terraform.lock.hcl
 tfplan
 coverage
+*.tsbuildinfo
