@@ -1,1 +1,1 @@
-{ "extends": "@demo/tsconfig/nest.json", "compilerOptions": { "outDir": "dist", "baseUrl": "./" }, "include": ["src"] }
+{ "extends": "@demo/tsconfig/nest.json", "compilerOptions": { "outDir": "dist", "baseUrl": "./" }, "include": ["src"], "exclude": ["src/**/*.spec.ts"] }
