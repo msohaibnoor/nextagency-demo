@@ -42,12 +42,27 @@ between retries, or a repeatable job's next scheduled run), and `stalled`
 as a recovery state: if a worker takes a job `active` and then dies (crash,
 lost connection) without heartbeating, BullMQ notices the missed lock
 renewal, marks the job `stalled`, and re-queues it — which is also why job
-processors must be safe to run more than once for the same job. Queried
-directly from a running instance in this repo:
+processors must be safe to run more than once for the same job. A job that
+exhausts all its retries ends in `failed`, queried directly from a running
+instance in this repo (seeded via `POST /api/jobs/seed {"count":20,"failRate":0.9}`
+so some jobs would actually exhaust all 3 attempts):
 
 ```
-$ curl localhost:4000/api/jobs/renewal-reminders/46
-{"id":"46","state":"completed","attemptsMade":3, ...}
+$ curl localhost:4000/api/jobs/renewal-reminders/23
+{
+    "id": "23",
+    "name": "remind",
+    "state": "failed",
+    "attemptsMade": 3,
+    "returnvalue": null,
+    "failedReason": "simulated failure for pol-18",
+    "data": {
+        "policyId": "pol-18",
+        "agencyId": "agency-3",
+        "renewalDate": "2026-12-01",
+        "failRate": 0.9
+    }
+}
 ```
 
 ## Retries
@@ -88,11 +103,17 @@ seeding separately with `failRate: 1`.
 
 **Why `maxRetriesPerRequest: null`** (`packages/queue/src/connection.ts`):
 this isn't job retries, it's the *ioredis command-level* retry limit. A
-BullMQ `Worker` blocks on Redis waiting for the next job (`BRPOPLPUSH`
-under the hood); if ioredis were allowed to give up on that command after
-N retries, the worker would throw and lose its blocking connection. BullMQ
-requires `null` (unlimited) so the underlying command retries forever
-instead of erroring out from under the worker.
+BullMQ `Worker` blocks on Redis waiting for the next job — confirmed by
+grepping the installed package
+(`node_modules/.pnpm/bullmq@5.81.5/node_modules/bullmq/dist/cjs/classes/worker.js`):
+it runs `bclient.bzpopmin(this.keys.marker, blockTimeout)`, a blocking
+`BZPOPMIN` on the queue's marker key (newer BullMQ moved off Bull v3's
+`BRPOPLPUSH`-on-the-job-list design; job data itself now lives outside that
+blocking call, with events delivered via Redis Streams). If ioredis were
+allowed to give up on that command after N retries, the worker would throw
+and lose its blocking connection. BullMQ requires `null` (unlimited) so the
+underlying command retries forever instead of erroring out from under the
+worker.
 
 ## Flows
 
@@ -127,7 +148,8 @@ a second one.
 
 `apps/worker/src/processors/sync.processor.ts`:
 `@Processor(QUEUES.rateLimitedSync, { concurrency: 5, limiter: { max: 5, duration: 10_000 } })`
-— at most 5 jobs start in any rolling 10-second window. The limiter's
+— at most 5 jobs start per fixed 10-second window (a Redis key with a TTL
+that resets after `duration`, not a rolling/sliding window). The limiter's
 counter lives in Redis, not in worker process memory, so it's enforced
 *across every worker instance consuming that queue* — running two copies
 of `apps/worker` doesn't double the effective throughput to 10/10s, Redis

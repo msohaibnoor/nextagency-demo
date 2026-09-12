@@ -43,8 +43,10 @@ Cached:    3 cached, 3 total
 ```
 
 `FULL TURBO` means every task in the run was a cache hit — nothing actually
-executed, turbo just replayed logs and restored `dist/`. 12ms vs. the ~5s
-the `--force` run took.
+executed, turbo just replayed logs and restored `dist/`, in 12ms. (A
+separately timed `--force` run, which skips the cache and actually runs
+`nest build` for both apps, took `Time: 4.581s` by turbo's own summary —
+`real 0m4.926s` wall-clock.)
 
 **`--filter`** scopes a run to part of the graph. `worker...` (dots after
 the name) means "worker and everything it depends on"; `...worker` (dots

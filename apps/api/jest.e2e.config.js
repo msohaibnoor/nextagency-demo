@@ -8,9 +8,12 @@ module.exports = {
   preset: "ts-jest", testEnvironment: "node", rootDir: ".",
   testRegex: "test/.*\\.e2e-spec\\.ts$", testTimeout: 30000, forceExit: true,
   // No dotenv loading happens for jest runs (only main.ts imports
-  // "dotenv/config"), and @demo/queue's redisConnectionOptions(process.env)
-  // runs at module-import time inside the spec file — so REDIS_URL must be
-  // set before that module graph is required, which is exactly what a
-  // setupFiles script guarantees (it runs before the test file is loaded).
+  // "dotenv/config"), and AppModule/WorkerModule call
+  // BullModule.forRoot({ connection: redisConnectionOptions(process.env) })
+  // as a decorator argument — evaluated at import time, when the module
+  // class itself is defined, not when it's instantiated. The spec file
+  // imports both modules, so REDIS_URL must already be set before those
+  // imports run, which is exactly what a setupFiles script guarantees (it
+  // runs before the test file is loaded).
   setupFiles: ["<rootDir>/test/setup-env.js"],
 };
