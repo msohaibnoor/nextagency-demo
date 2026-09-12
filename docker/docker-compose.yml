@@ -2,3 +2,23 @@ services:
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
+
+  api:
+    profiles: ["full"]
+    build: { context: .., dockerfile: docker/Dockerfile.api }
+    environment: { REDIS_URL: redis://redis:6379 }
+    ports: ["4000:4000"]
+    depends_on: [redis]
+
+  worker:
+    profiles: ["full"]
+    build: { context: .., dockerfile: docker/Dockerfile.worker }
+    environment: { REDIS_URL: redis://redis:6379 }
+    depends_on: [redis]
+
+  web:
+    profiles: ["full"]
+    build: { context: .., dockerfile: docker/Dockerfile.web }
+    environment: { API_URL: http://api:4000 }
+    ports: ["3000:3000"]
+    depends_on: [api]
