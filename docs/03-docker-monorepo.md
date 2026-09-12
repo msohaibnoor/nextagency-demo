@@ -120,3 +120,14 @@ natively for the same `Dockerfile.worker` build. `pnpm install` was ~5x
 slower too (~107s vs ~20-60s natively). This is why arm64 images belong in
 CI on native arm64 runners (or a remote builder), not in a developer's
 day-to-day inner loop.
+
+**Decision:** based on this ~77-minute measurement, the project moved from
+`ARM64` to `X86_64` Fargate for the production deploy (design doc §1,
+2026-09-13). The trade-off is cost, not capability — Fargate `X86_64`
+pricing runs roughly 20% higher than the equivalent `ARM64` (`Graviton`)
+task, about $0.20/day more for this demo's three tiny (256/512) tasks —
+but that's cheap insurance against every image build (local, CI, or a
+one-off debug build) taking well over an hour instead of well under a
+minute. The Dockerfiles themselves needed no changes for this — they were
+already multi-arch; only `--platform` at build time and the Fargate task
+definition's `runtime_platform.cpu_architecture` change.

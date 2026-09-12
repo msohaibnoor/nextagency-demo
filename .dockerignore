@@ -7,3 +7,8 @@ node_modules
 .git
 infra
 docs
+.env
+**/.env
+.env.*
+**/.env.*
+!**/.env.example

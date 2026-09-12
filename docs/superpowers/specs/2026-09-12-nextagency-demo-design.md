@@ -23,7 +23,7 @@ use* over the simplest thing that works.
 | Domain / TLS | None. Plain HTTP on the ALB's DNS name | No hosted zone in the personal account |
 | Database | None. Redis only (BullMQ + a results hash) | User's choice; keeps AWS surface small |
 | Services | Three Fargate services: `web`, `api`, `worker` (approach A) | Mirrors Rails `web` + Sidekiq split |
-| CPU arch | `linux/arm64` images, Fargate `ARM64` | Cheaper; matches `t4g` sizing |
+| CPU arch | `linux/amd64` images, Fargate `X86_64` | arm64 via QEMU measured at ~77 min per image on the dev laptop (2026-09-13); x86 costs ≈ $0.20/day more for this demo |
 | NAT | One NAT gateway in one AZ | Keeps the private-subnet pattern; ~$1.10/day |
 | Deploy path | Phase 1 local `scripts/deploy.sh`; Phase 2 GitHub Actions with OIDC | Learn each step, then automate it |
 | Budget | ≈ $3.70/day; `terraform destroy` after 2–3 days | Budget alarm is the first resource created |
@@ -193,7 +193,7 @@ Each Dockerfile is the same four-stage pattern:
 | `ecr.tf` | 3 × `aws_ecr_repository` (`force_delete = true`, scan on push) + lifecycle policy keep last 10 |
 | `logs.tf` | 3 × `aws_cloudwatch_log_group` `/ecs/nextagency-demo/<app>`, 7-day retention |
 | `iam.tf` | `ecs_execution` role: `AmazonECSTaskExecutionRolePolicy` + `secretsmanager:GetSecretValue` on the one secret. `ecs_task` role: `ssmmessages:*` for ECS Exec only |
-| `compute.tf` | `aws_ecs_cluster` (containerInsights enabled); 3 `aws_ecs_task_definition` (Fargate, `ARM64`, `LINUX`, 256/512, `awslogs`, `secrets: [{name: REDIS_URL, valueFrom: secret ARN}]`, web gets `API_URL = "http://${aws_lb.this.dns_name}"`); `aws_lb` (application, public subnets, `sg_alb`); 2 `aws_lb_target_group` (ip type, web :3000 health `/`, api :4000 health `/api/health`); listener :80 default → web TG, rule priority 10 `path_pattern ["/api/*"]` → api TG; 3 `aws_ecs_service` (`desired_count = 1`, private-app subnets, `sg_app`, `assign_public_ip = false`, `enable_execute_command = true`, `deployment_circuit_breaker { enable = true, rollback = true }`, `web`/`api` with `load_balancer` block, `worker` without); `depends_on` listener |
+| `compute.tf` | `aws_ecs_cluster` (containerInsights enabled); 3 `aws_ecs_task_definition` (Fargate, `X86_64`, `LINUX`, 256/512, `awslogs`, `secrets: [{name: REDIS_URL, valueFrom: secret ARN}]`, web gets `API_URL = "http://${aws_lb.this.dns_name}"`); `aws_lb` (application, public subnets, `sg_alb`); 2 `aws_lb_target_group` (ip type, web :3000 health `/`, api :4000 health `/api/health`); listener :80 default → web TG, rule priority 10 `path_pattern ["/api/*"]` → api TG; 3 `aws_ecs_service` (`desired_count = 1`, private-app subnets, `sg_app`, `assign_public_ip = false`, `enable_execute_command = true`, `deployment_circuit_breaker { enable = true, rollback = true }`, `web`/`api` with `load_balancer` block, `worker` without); `depends_on` listener |
 | `cicd.tf` | `aws_iam_role` `github-deploy` trusting the bootstrap OIDC provider with `sub` = `repo:${var.github_repo}:ref:refs/heads/${var.github_branch}`; inline policy: `ecr:GetAuthorizationToken` (*), ECR push actions on the 3 repos, `ecs:UpdateService`/`DescribeServices` on the 3 services, `ecs:RegisterTaskDefinition`, `iam:PassRole` on the two roles |
 | `outputs.tf` | `alb_dns_name`, `ecr_repository_urls` (map), `cluster_name`, `service_names` (map), `github_deploy_role_arn` |
 
@@ -210,7 +210,7 @@ tag for traceability; Terraform is not re-run for app releases.
 ### `scripts/deploy.sh <api|worker|web> [tag]`
 
 1. `TAG=${2:-$(git rev-parse --short HEAD)}`; read ECR URL, cluster, service from `terraform output -json`.
-2. `docker buildx build --platform linux/arm64 -f docker/Dockerfile.$APP -t $REPO:$TAG -t $REPO:latest --push .`
+2. `docker buildx build --platform linux/amd64 -f docker/Dockerfile.$APP -t $REPO:$TAG -t $REPO:latest --push .`
    (after `aws ecr get-login-password | docker login`).
 3. `aws ecs update-service --cluster $CLUSTER --service $SERVICE --force-new-deployment`.
 4. `aws ecs wait services-stable`; print the ALB URL.
@@ -221,7 +221,7 @@ tag for traceability; Terraform is not re-run for app releases.
 - `permissions: { id-token: write, contents: read }`.
 - `aws-actions/configure-aws-credentials@v4` with `role-to-assume: <github_deploy_role_arn>`, region.
 - Matrix over `[api, worker, web]`, each running `scripts/deploy.sh $APP $GITHUB_SHA`.
-- Uses `docker/setup-qemu-action` + `setup-buildx-action` for arm64.
+- Uses `setup-buildx-action` for native amd64 builds.
 
 ---
 
@@ -250,7 +250,7 @@ One `docs/NN-<topic>.md` per phase, written when the phase is verified, each ≤
 
 - Bull Board and every API route are unauthenticated and internet-reachable via the ALB for the
   demo's lifetime. Acceptable for 2–3 days with dummy data; must not be copied to V3.
-- arm64 builds on an x86 laptop use QEMU; first build ≈ 5–10 min.
+- Native amd64 builds; no QEMU emulation needed for CI or local Fargate images.
 - ElastiCache creation ≈ 6–8 min; destroy ≈ 5 min. Total apply ≈ 10 min.
 - Terraform, AWS CLI and `gh` are not yet installed locally; the plan starts there.
 - No HTTPS: browsers may warn; irrelevant for the demo.
