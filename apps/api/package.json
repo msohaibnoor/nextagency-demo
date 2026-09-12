@@ -9,7 +9,7 @@
     "@bull-board/api": "^6.5.3", "@bull-board/express": "^6.5.3", "@bull-board/nestjs": "^6.5.3",
     "@demo/queue": "workspace:*",
     "@nestjs/bullmq": "^11.0.1", "@nestjs/common": "^11.0.1", "@nestjs/core": "^11.0.1",
-    "@nestjs/platform-express": "^11.0.1", "bullmq": "^5.34.0", "ioredis": "^5.4.2",
+    "@nestjs/platform-express": "^11.0.1", "bullmq": "^5.34.0", "dotenv": "^16.4.7", "ioredis": "^5.4.2",
     "reflect-metadata": "^0.2.2", "rxjs": "^7.8.1"
   },
   "devDependencies": {

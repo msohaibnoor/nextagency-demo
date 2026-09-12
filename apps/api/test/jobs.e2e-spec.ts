@@ -12,7 +12,6 @@ describe("jobs e2e", () => {
   let worker: INestApplicationContext;
 
   beforeAll(async () => {
-    process.env.REDIS_URL ??= "redis://localhost:6379";
     const q = new Queue(QUEUES.renewalReminders, { connection: redisConnectionOptions(process.env) });
     await q.obliterate({ force: true });
     await q.close();
