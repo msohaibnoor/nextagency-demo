@@ -18,7 +18,9 @@ describe("JobsService", () => {
     expect(ids).toEqual(["1", "2", "3"]);
     const [jobs] = reminders.addBulk.mock.calls[0];
     expect(jobs).toHaveLength(3);
+    // @ts-expect-error TS2571: brief's addBulk mock types its arg as unknown[], so jobs[0] is `unknown` here.
     expect(jobs[0].opts).toMatchObject({ attempts: 3, backoff: { type: "exponential", delay: 1000 } });
+    // @ts-expect-error TS2571: brief's addBulk mock types its arg as unknown[], so jobs[0] is `unknown` here.
     expect(jobs[0].data.failRate).toBe(0.5);
   });
 
@@ -30,15 +32,42 @@ describe("JobsService", () => {
   it("builds a nested report flow gather -> render -> email -> parent", async () => {
     const id = await svc.report({ agencyId: "a1", month: "2026-09" });
     expect(id).toBe("parent-1");
+    // @ts-expect-error TS2493: brief's flow.add mock has a zero-arg signature, so mock.calls[0] is typed `[]`.
     const tree = flow.add.mock.calls[0][0];
+    // @ts-expect-error TS18048: `tree`'s inferred type includes undefined per the mock signature above.
     expect(tree.name).toBe("report");
+    // @ts-expect-error TS18048: `tree`'s inferred type includes undefined per the mock signature above.
     expect(tree.children[0].name).toBe("email");
+    // @ts-expect-error TS18048: `tree`'s inferred type includes undefined per the mock signature above.
     expect(tree.children[0].children[0].name).toBe("render");
+    // @ts-expect-error TS18048: `tree`'s inferred type includes undefined per the mock signature above.
     expect(tree.children[0].children[0].children[0].name).toBe("gather");
   });
 
   it("returns stats keyed by queue name", async () => {
     const s = await svc.stats();
     expect(Object.keys(s).sort()).toEqual(["nightly-sweep", "rate-limited-sync", "renewal-reminders", "reports"]);
+  });
+
+  describe("get", () => {
+    it("resolves null for an unknown queue name", async () => {
+      expect(await svc.get("bogus-queue" as never, "1")).toBeNull();
+    });
+
+    it("resolves null when the job is not found", async () => {
+      reminders.getJob.mockResolvedValueOnce(undefined);
+      expect(await svc.get("renewal-reminders", "999")).toBeNull();
+    });
+
+    it("resolves the job summary when found", async () => {
+      reminders.getJob.mockResolvedValueOnce({
+        id: "7", name: "remind", attemptsMade: 1, returnvalue: "ok", failedReason: undefined,
+        data: { policyId: "p" }, getState: async () => "completed",
+      });
+      expect(await svc.get("renewal-reminders", "7")).toEqual({
+        id: "7", name: "remind", state: "completed", attemptsMade: 1,
+        returnvalue: "ok", failedReason: undefined, data: { policyId: "p" },
+      });
+    });
   });
 });
