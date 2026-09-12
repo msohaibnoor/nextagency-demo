@@ -1,0 +1,1 @@
+{ "extends": "@demo/tsconfig/base.json", "include": ["*.ts"] }

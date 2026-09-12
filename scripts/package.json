@@ -1,0 +1,6 @@
+{
+  "name": "scripts", "version": "0.0.0", "private": true,
+  "scripts": { "seed": "tsx seed-queue.ts" },
+  "dependencies": { "@demo/queue": "workspace:*", "bullmq": "^5.34.0" },
+  "devDependencies": { "@demo/tsconfig": "workspace:*", "tsx": "^4.19.2", "@types/node": "^22.10.2" }
+}
