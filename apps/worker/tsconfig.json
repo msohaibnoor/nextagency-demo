@@ -1,0 +1,1 @@
+{ "extends": "@demo/tsconfig/nest.json", "compilerOptions": { "outDir": "dist", "baseUrl": "./" }, "include": ["src"] }
