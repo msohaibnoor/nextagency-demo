@@ -16,11 +16,18 @@ export class ResultsStore {
   // the record-and-trim is a single atomic round-trip even at concurrency 5.
   async record(queue: QueueName, result: JobResult) {
     const key = resultsKey(queue);
-    await this.redis
+    const replies = await this.redis
       .multi()
       .zadd(key, Date.now(), JSON.stringify(result))
       .zremrangebyrank(key, 0, -(MAX + 1))
       .exec();
+    // ioredis resolves exec() with a [err, result][] tuple per command and
+    // does NOT reject the promise on a per-command error (e.g. WRONGTYPE) —
+    // only a queueing/syntax failure aborts the whole MULTI (replies: null).
+    // Surface both cases, otherwise a failed ZADD leaves the job "completed"
+    // with nothing actually persisted.
+    if (!replies) throw new Error(`results store: MULTI aborted for ${key}`);
+    for (const [err] of replies) if (err) throw err;
   }
 
   count(queue: QueueName) {
