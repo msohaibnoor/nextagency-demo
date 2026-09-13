@@ -28,10 +28,15 @@ AWS_PROFILE=personal timeout 900 scripts/deploy.sh api drill-bad
 
 `scripts/deploy.sh` registered this as task-definition `nextagency-demo-api:4`
 (the CI deploy above had already claimed `:3`) and called `update-service`.
-ECS then cycled through **three** replacement tasks, each rejected by the ALB
-target group's health check (`interval 15s`, `unhealthy_threshold 3` →
-45s per attempt, `compute.tf`), before the deployment circuit breaker
-(`enable: true, rollback: true, threshold: BOUNDED_PERCENT 50`) gave up:
+`infra/production/compute.tf`'s `aws_ecs_service.app` sets, verbatim:
+`deployment_circuit_breaker { enable = true, rollback = true }`,
+`deployment_minimum_healthy_percent = 100`, `deployment_maximum_percent = 200`,
+and (for `api`/`web`, not `worker`) `health_check_grace_period_seconds = 60`.
+The ALB target group's health check is `interval 15s`, `unhealthy_threshold 3`
+(45s of failing checks to condemn a task), `healthy_threshold 2`,
+`deregistration_delay 10`. ECS then cycled through **three** replacement
+tasks, each rejected by that health check, before the circuit breaker gave
+up:
 
 ```
 (task c9beb1b8…) (port 4000) is unhealthy … Health checks failed with these codes: [500]
@@ -41,10 +46,17 @@ target group's health check (`interval 15s`, `unhealthy_threshold 3` →
 (service api) rolling back to deployment ecs-svc/4744463545704487209.
 ```
 
-Timeline: `update-service` at 15:45:51 → last task declared unhealthy
-15:54:58 → circuit breaker fires and starts rollback 15:55:47 → rollback
-`rolloutState: COMPLETED` on `api:3` at 15:56:13. **~10m22s** end to end,
-almost all of it three sequential 45s-health-check-plus-relaunch cycles.
+Timeline (from the `describe-services` snapshots polled every ~20s during
+the drill; see the report's evidence appendix for the raw lines):
+`update-service` creates the `:4` deployment at 15:45:51 → task 1
+(`c9beb1b8…`) first shown unhealthy 15:47:52 → task 2 (`fe8a0562…`) 15:51:39
+→ task 3 (`fb1a36d8…`) 15:55:04 → circuit breaker fires ("deployment failed:
+tasks failed to start" / "rolling back to deployment …") 15:55:49 →
+rollback `rolloutState: COMPLETED` on `api:3` at 15:56:13. **~10m22s** end to
+end — longer than "3 × 45s" because each of the three attempts also carries
+the 60s `health_check_grace_period_seconds` (ECS won't act on a failing
+health check until a newly-started task clears its grace window) plus
+Fargate provisioning/relaunch time on top of the 45s ALB threshold itself.
 
 **The safety net held**: `/api/health` was polled every ~2-3s throughout
 (15:42:50 → 15:56:48, 307 requests) and every single one returned `200`
@@ -77,18 +89,21 @@ Immediately after: `waiting: 1932, active: 0` (68 jobs already done). Polling
 | Time | Event |
 |---|---|
 | 15:58:10 | task stopped (`stoppedReason: drill`, `stopCode: UserInitiated`) |
-| 15:58:10 → 15:59:16 | `list-tasks` returns **no tasks** for the worker service (~66s) |
+| 15:58:25 → 15:59:09 | every `list-tasks` poll in this window returns **no tasks** for the worker service (first poll 15s after the stop; last empty poll 15:59:09) |
 | 15:59:16 | replacement task visible in `list-tasks` |
 | 15:59:41 | replacement starts consuming: `active` jumps 0→5, `waiting` 1932→1888 |
 | 16:01:43 | queue fully drained: `waiting: 0, active: 0` |
 
-So: ~66s with zero running workers before ECS's replacement task is even
-visible, another ~25s before it's warm enough to pull jobs (Fargate
-provisioning + Node boot + Redis connect), then it chews through the
-remaining ~1930 jobs at ~16/s (5 concurrency × ~300ms average) — **3m33s**
-total from kill to fully drained. `failed` stayed at 0 the whole time: the
-jobs that were `active` on the dead task went back to `waiting` via BullMQ's
-stalled-job checker and were reprocessed cleanly, not lost. Final state:
+So: at least ~51s (15:58:25→15:59:16, the observed empty window) and up to
+~66s counting from the stop itself (15:58:10→15:59:16) with zero running
+workers before ECS's replacement task is even visible, another ~25s before
+it's warm enough to pull jobs (Fargate provisioning + Node boot + Redis
+connect), then it chews through the remaining ~1930 jobs at ~16/s (5
+concurrency × ~300ms average, from the `waiting` deltas in the poll log) —
+**3m33s** total from kill (15:58:10) to fully drained (16:01:43). `failed`
+stayed at 0 the whole time: the jobs that were `active` on the dead task
+went back to `waiting` via BullMQ's stalled-job checker and were reprocessed
+cleanly, not lost. Final state:
 `nextagency-demo-worker:3`, desired 1, running 1.
 
 ## Drill 3: scale worker to 2 → rate limiter stays global
@@ -102,14 +117,16 @@ curl -s -XPOST http://$ALB/api/jobs/seed -d '{"count":20,"queue":"rate-limited-s
 `sync.processor.ts` sets `limiter: { max: 5, duration: 10_000 }` — "5 jobs
 per 10s **across all worker instances**", per its own comment, because
 BullMQ enforces the limiter in Redis, not in-process. With two tasks now
-pulling from the same queue, polling `/api/jobs/stats` at t+2s/12s/22s after
-a clean seed:
+pulling from the same queue, a seed was fired and `/api/jobs/stats` polled
+with a script that requested polls at t+2s/12s/22s; actual elapsed time by
+the point each poll's `curl` returned was t+2s/13s/23s (one second of drift
+from the script's own `curl`/`jq` overhead each iteration):
 
-| t | `completed` (cumulative) | delta |
-|---|---|---|
-| +2s | 25 | +5 (initial burst) |
-| +13s | 30 | +5 |
-| +23s | 35 | +5 |
+| requested t | actual elapsed | wall clock | `completed` (cumulative) | delta |
+|---|---|---|---|---|
+| +2s | 2s | 16:04:16 | 25 | +5 (initial burst) |
+| +12s | 13s | 16:04:26 | 30 | +5 |
+| +22s | 23s | 16:04:36 | 35 | +5 |
 
 Exactly 5 per ~10s window, *total* — not 5 per task (which would have shown
 10 per window with two workers racing independently). Scaled back down
@@ -125,9 +142,10 @@ immediately after: `desired-count 1`, stable in 2s, final state
 - `aws ecs wait services-stable` confirms the *service* stabilized, not that
   *your* task definition is the one running — always check
   `deployments[0].taskDefinition` after.
-- ECS replacing a killed task is not instant: budget ~60-90s of zero
-  capacity before a replacement is even pulling work, on top of BullMQ's
-  stalled-job recovery making that gap safe rather than lossy.
+- ECS replacing a killed task is not instant: this run measured 91s
+  (15:58:10→15:59:41) of zero active workers before the replacement task was
+  pulling jobs, on top of BullMQ's stalled-job recovery making that gap safe
+  rather than lossy.
 - Horizontal scaling is just a number to ECS; a rate limiter backed by Redis
   (not process memory) is what keeps a shared external quota (e.g. a
   carrier's sync API) safe under that scaling.
