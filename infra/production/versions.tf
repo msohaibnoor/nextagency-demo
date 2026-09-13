@@ -19,9 +19,10 @@ terraform {
   }
 }
 
+# No `profile` here: credentials come from the environment (AWS_PROFILE locally,
+# the OIDC session in CI), so the same root works in both places.
 provider "aws" {
-  region  = var.region
-  profile = var.aws_profile
+  region = var.region
   default_tags {
     tags = {
       Project     = "nextagency-demo"

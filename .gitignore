@@ -10,7 +10,6 @@ dist
 *.tfvars
 !*.tfvars.example
 .terraform/
-.terraform.lock.hcl
 tfplan
 coverage
 *.tsbuildinfo
