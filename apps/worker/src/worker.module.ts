@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
 import { BullModule } from "@nestjs/bullmq";
-import Redis from "ioredis";
 import { ALL_QUEUES, redisConnectionOptions } from "@demo/queue";
+import { RedisClient } from "./redis.client";
 import { REDIS, ResultsStore } from "./results/results.store";
 import { RemindersProcessor } from "./processors/reminders.processor";
 import { ReportsProcessor } from "./processors/reports.processor";
@@ -22,7 +22,8 @@ import { SyncProcessor } from "./processors/sync.processor";
     BullModule.registerQueue(...ALL_QUEUES.map((name) => ({ name }))),
   ],
   providers: [
-    { provide: REDIS, useFactory: () => new Redis(redisConnectionOptions(process.env)) },
+    RedisClient,
+    { provide: REDIS, useFactory: (r: RedisClient) => r.client, inject: [RedisClient] },
     ResultsStore,
     RemindersProcessor,
     ReportsProcessor,
