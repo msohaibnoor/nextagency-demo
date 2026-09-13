@@ -1,7 +1,12 @@
-import { Body, Controller, Get, NotFoundException, Param, Post } from "@nestjs/common";
-import type { QueueName } from "@demo/queue";
+import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post } from "@nestjs/common";
+import { QUEUES, type QueueName } from "@demo/queue";
 import { JobsService } from "./jobs.service";
 import type { ReportDto, SeedDto } from "./seed.dto";
+
+// Only these two queues have a producer-side seed shape; `reports` is fed by
+// the flow endpoint and `nightly-sweep` by its scheduler.
+export const SEEDABLE_QUEUES: readonly QueueName[] = [QUEUES.renewalReminders, QUEUES.rateLimitedSync];
+export const MAX_SEED_COUNT = 5000;
 
 @Controller("api/jobs")
 export class JobsController {
@@ -9,11 +14,14 @@ export class JobsController {
 
   @Post("seed")
   async seed(@Body() body: SeedDto) {
-    const ids = await this.jobs.seed({
-      count: body.count !== undefined ? Number(body.count) : undefined,
-      failRate: body.failRate !== undefined ? Number(body.failRate) : undefined,
-      queue: body.queue,
-    });
+    // Bound untrusted input: NaN/negative → 0, > MAX → MAX, failRate ∈ [0, 1].
+    const count = Math.min(Math.max(Math.trunc(Number(body.count ?? 50)) || 0, 0), MAX_SEED_COUNT);
+    const failRate = Math.min(Math.max(Number(body.failRate ?? 0.2) || 0, 0), 1);
+    const queue = body.queue ?? QUEUES.renewalReminders;
+    if (!SEEDABLE_QUEUES.includes(queue)) {
+      throw new BadRequestException(`queue must be one of: ${SEEDABLE_QUEUES.join(", ")}`);
+    }
+    const ids = await this.jobs.seed({ count, failRate, queue });
     return { enqueued: ids.length, ids };
   }
 
