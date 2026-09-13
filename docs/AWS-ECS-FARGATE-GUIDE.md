@@ -394,7 +394,12 @@ Flow, in order:
    `AWS_DEPLOY_ROLE_ARN`.
 4. AWS checks the role's **trust policy**: is the token signed by the provider registered in Phase 8?
    Is `aud` = `sts.amazonaws.com`? Does `sub` match `repo:<your repo>:ref:refs/heads/main`? All yes →
-   temporary credentials (1 hour) for the `github-deploy` role.
+   temporary credentials (1 hour) for the `github-deploy` role. In this stack's first real run every
+   job failed here with a deliberately vague `Not authorized to perform sts:AssumeRoleWithWebIdentity`;
+   `aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity`
+   showed the actual `sub` GitHub sent was `repo:owner@<ownerId>/name@<repoId>:ref:refs/heads/main` — a
+   newer id-pinned format the trust policy's `sub` pattern didn't match yet (see `docs/08-deploy-and-oidc.md`
+   part 2 for the fix and why the id-pinned form is the stronger match).
 5. That role can *only* push to the three ECR repos, register task definitions, update the three
    services, and read Terraform state. It cannot create a VPC, read the Redis secret, or touch
    anything tagged differently. Check it: IAM → Roles → `nextagency-demo-github-deploy` → Permissions.
