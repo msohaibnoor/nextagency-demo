@@ -1,4 +1,4 @@
-import { Processor, WorkerHost } from "@nestjs/bullmq";
+import { OnWorkerEvent, Processor, WorkerHost } from "@nestjs/bullmq";
 import { Job } from "bullmq";
 import { QUEUES, type RateLimitedSyncJob } from "@demo/queue";
 import { ResultsStore } from "../results/results.store";
@@ -14,7 +14,11 @@ export class SyncProcessor extends WorkerHost {
     await this.results.record(QUEUES.rateLimitedSync, {
       jobId: String(job.id), queue: QUEUES.rateLimitedSync, finishedAt: new Date().toISOString(), summary,
     });
-    log("completed", { queue: QUEUES.rateLimitedSync, jobId: job.id });
     return summary;
+  }
+
+  @OnWorkerEvent("completed") onCompleted(job: Job) { log("completed", { queue: QUEUES.rateLimitedSync, jobId: job.id }); }
+  @OnWorkerEvent("failed") onFailed(job: Job | undefined, err: Error) {
+    log("failed", { queue: QUEUES.rateLimitedSync, jobId: job?.id, attemptsMade: job?.attemptsMade, error: err.message });
   }
 }
