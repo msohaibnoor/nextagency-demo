@@ -3,11 +3,6 @@ variable "region" {
   default = "us-east-1"
 }
 
-variable "aws_profile" {
-  type    = string
-  default = "personal"
-}
-
 variable "vpc_cidr" {
   type    = string
   default = "10.40.0.0/16"
@@ -41,4 +36,16 @@ variable "task_memory" {
 variable "github_oidc_provider_arn" {
   type        = string
   description = "from bootstrap output"
+}
+
+# Numeric GitHub ids embedded in the OIDC `sub` claim (`repo:owner@<id>/name@<id>:ref:…`),
+# read from CloudTrail's AssumeRoleWithWebIdentity event for this repo.
+variable "github_owner_id" {
+  type    = string
+  default = "73883272"
+}
+
+variable "github_repo_id" {
+  type    = string
+  default = "1367206627"
 }
