@@ -8,7 +8,7 @@ export default async function Home() {
   const cols = ["waiting", "active", "completed", "failed", "delayed"] as const;
   return (
     <main>
-      <h1>NextAgency Demo — queue dashboard</h1>
+      <h1>NextAgency Demo — queue dashboard (v2)</h1>
       <Actions />
       <table>
         <thead><tr><th>queue</th>{cols.map((c) => <th key={c}>{c}</th>)}</tr></thead>
