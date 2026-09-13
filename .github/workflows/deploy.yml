@@ -1,6 +1,8 @@
 name: deploy
 on:
-  push: { branches: [main] }
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**.md"]
   workflow_dispatch:
 
 permissions:
@@ -9,6 +11,12 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
+
+# One deploy per ref at a time; a second push queues behind the running one
+# rather than racing it (two rollouts of the same service would fight).
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -23,10 +31,5 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-      - uses: hashicorp/setup-terraform@v3
-        with: { terraform_wrapper: false }
-      - name: terraform init (read outputs only)
-        working-directory: infra/production
-        run: terraform init -input=false
       - name: deploy ${{ matrix.app }}
         run: scripts/deploy.sh ${{ matrix.app }} ${GITHUB_SHA::7}
