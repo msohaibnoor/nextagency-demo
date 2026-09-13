@@ -21,7 +21,9 @@ resource "aws_lb_target_group" "web" {
   target_type = "ip"
   vpc_id      = aws_vpc.this.id
   health_check {
-    path                = "/"
+    # /healthz is a static Next.js route that never calls the api, so a web
+    # task is not condemned while api is mid-rollout (`/` fetches /api/jobs/stats).
+    path                = "/healthz"
     matcher             = "200"
     interval            = 15
     healthy_threshold   = 2
@@ -137,6 +139,11 @@ resource "aws_ecs_service" "app" {
   desired_count          = 1
   launch_type            = "FARGATE"
   enable_execute_command = true
+  # Tasks carry no tags by default, so Fargate spend is invisible under the
+  # Project cost-allocation tag. Copy the service's tags (default_tags) onto
+  # every task it launches, and let ECS add its own aws:ecs:* tags.
+  propagate_tags          = "SERVICE"
+  enable_ecs_managed_tags = true
 
   network_configuration {
     subnets          = aws_subnet.private_app[*].id
@@ -167,6 +174,7 @@ resource "aws_ecs_service" "app" {
     aws_lb_listener_rule.api,
     aws_iam_role_policy.execution_secrets,
     aws_iam_role_policy_attachment.execution_managed,
+    aws_secretsmanager_secret_version.redis_url, # the task's REDIS_URL must have an AWSCURRENT value before the first launch
   ]
 
   lifecycle { ignore_changes = [task_definition] } # app deploys register new revisions outside Terraform
