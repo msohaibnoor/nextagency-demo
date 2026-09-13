@@ -128,9 +128,12 @@ picked up by four different worker processes.
 
 A job accesses its children's results with `job.getChildrenValues()`
 (`apps/worker/src/processors/reports.processor.ts`), which returns an
-object keyed by the children's `queueName:jobId` and valued by each
-child's `returnvalue` — that's how `report`'s summary string gets built
-from what `email`/`render`/`gather` each returned.
+object keyed by each child's **full Redis job key** — `bull:reports:<id>`,
+i.e. `<prefix>:<queueName>:<jobId>` — and valued by that child's
+`returnvalue`. `reports.processor.ts` only uses `Object.values()`, so the
+key shape doesn't matter there, but anything that wants a *specific* child
+must build the full key, not `queueName:jobId`. That's how `report`'s
+summary string gets built from what `email`/`render`/`gather` each returned.
 
 ## Job schedulers
 

@@ -102,10 +102,62 @@ it's warm enough to pull jobs (Fargate provisioning + Node boot + Redis
 connect), then it chews through the remaining ~1930 jobs at ~16/s (5
 concurrency × ~300ms average, from the `waiting` deltas in the poll log) —
 **3m33s** total from kill (15:58:10) to fully drained (16:01:43). `failed`
-stayed at 0 the whole time: the jobs that were `active` on the dead task
-went back to `waiting` via BullMQ's stalled-job checker and were reprocessed
-cleanly, not lost. Final state:
+stayed at 0 the whole time and nothing was lost. Final state:
 `nextagency-demo-worker:3`, desired 1, running 1.
+
+### What actually happened to the in-flight jobs (not stalled recovery)
+
+An earlier draft of this note credited BullMQ's stalled-job checker with
+rescuing the five `active` jobs. That is not what `stop-task` exercises.
+The mechanism was a **graceful drain**:
+
+1. `aws ecs stop-task` makes ECS send `SIGTERM` to PID 1 (`node
+   apps/worker/dist/main.js`) and start the container's `stopTimeout` clock
+   (60 s for `worker`, `compute.tf`).
+2. `main.ts` calls `app.enableShutdownHooks()`, so Nest turns the signal
+   into `onApplicationShutdown` across its providers.
+3. `@nestjs/bullmq` closes each `@Processor` via `Worker.close()`, which
+   stops fetching and **waits for the jobs currently in `process()`** —
+   ≤500 ms each for reminders — before resolving. `RedisClient` closes the
+   plain ioredis connection the same way.
+4. The process exits 0 well inside the 60 s; the five `active` jobs had
+   already completed and been acknowledged, so there was nothing for the
+   stalled checker to find.
+
+No `stalled` events appeared in the worker log for this run, and none were
+expected. Stalled recovery only fires when a job's lock in Redis expires
+without the worker renewing it (default `lockDuration` 30 s, checked every
+`stalledInterval` 30 s) — i.e. when the process dies *without* running
+`Worker.close()`.
+
+### Exercise: force a real stalled recovery
+
+Two ways to remove the graceful path so the jobs really are abandoned
+mid-flight:
+
+- **Kill PID 1 hard** — `SIGKILL` bypasses the Nest hooks entirely:
+
+  ```bash
+  TASK=$(aws ecs list-tasks --cluster nextagency-demo --service-name worker --query 'taskArns[0]' --output text)
+  curl -s -XPOST http://$ALB/api/jobs/seed -d '{"count":2000,"failRate":0}'
+  aws ecs execute-command --cluster nextagency-demo --task "$TASK" --container worker \
+    --interactive --command "kill -9 1"
+  ```
+
+- **Shrink the grace window** — set `stop_timeout = 2` for `worker` in
+  `compute.tf`, apply, redeploy, and use `stop-task` as above with a
+  processor that sleeps longer than 2 s; ECS kills the container before
+  `Worker.close()` finishes.
+
+What to look for: the seeded `active` count stays at 5 for up to ~30 s
+after the kill while the replacement task boots (the locks are still held
+by a dead process), then the replacement's stalled checker moves them back
+to `waiting` and the worker log shows `{"event":"stalled",…}` lines if a
+`@OnWorkerEvent("stalled")` handler is added (none of the processors log
+it today), followed by a second `completed` for the same `jobId`. A job that stalls
+more than `maxStalledCount` times (default 1) is moved to `failed` instead
+of being retried, so repeating the kill quickly on the same batch will
+also show a non-zero `failed` count.
 
 ## Drill 3: scale worker to 2 → rate limiter stays global
 
@@ -145,8 +197,9 @@ immediately after: `desired-count 1`, stable in 2s, final state
   `deployments[0].taskDefinition` after.
 - ECS replacing a killed task is not instant: this run measured 91s
   (15:58:10→15:59:41) of zero active workers before the replacement task was
-  pulling jobs, on top of BullMQ's stalled-job recovery making that gap safe
-  rather than lossy.
+  pulling jobs. The gap was lossless because `stop-task` is a *graceful*
+  stop — SIGTERM, Nest shutdown hooks, `Worker.close()` — not because of
+  stalled-job recovery, which this drill never triggered.
 - Horizontal scaling is just a number to ECS; a rate limiter backed by Redis
   (not process memory) is what keeps a shared external quota (e.g. a
   carrier's sync API) safe under that scaling.

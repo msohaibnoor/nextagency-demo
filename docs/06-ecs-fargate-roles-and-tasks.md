@@ -92,15 +92,17 @@ and needing BullMQ's stall-recovery to redo it.
 ## `runtime_platform` and this stack's architecture
 
 `runtime_platform { cpu_architecture = ..., operating_system_family =
-"LINUX" }` is a required block on every Fargate task definition — it's how
-Fargate picks the underlying hardware to run your container on, and it must
-exactly match the architecture the image was built for or you get a boot
-failure, not a graceful error. Graviton (`ARM64`) is often the default
-recommendation for greenfield ECS Fargate work because it's cheaper per
-vCPU-hour; this stack pins `X86_64` instead, matching the demo's
-`--platform linux/amd64` image builds — a deliberate choice for this account
-to avoid any cross-arch surprises during first bring-up, not a Graviton
-oversight.
+"LINUX" }` is an *optional* block on a Fargate task definition — omit it
+and ECS assumes `LINUX` / `X86_64`. It's how Fargate picks the underlying
+hardware to run your container on, and it must exactly match the
+architecture the image was built for or you get a boot failure, not a
+graceful error. Graviton (`ARM64`) is often the default recommendation for
+greenfield ECS Fargate work because it's cheaper per vCPU-hour; this stack
+spells out `X86_64` explicitly, matching the demo's `--platform linux/amd64`
+image builds. The reason is the one measured in `docs/03-docker-monorepo.md`:
+building the arm64 image under QEMU on the x86 dev laptop took ~77 minutes,
+so the project moved to native amd64 images and x86 Fargate (≈ $0.20/day
+more) rather than emulate every build.
 
 ## The deployment circuit breaker
 

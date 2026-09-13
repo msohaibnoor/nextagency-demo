@@ -26,6 +26,8 @@ scripts/cost-check.sh --untagged  # total account cost by service (works before 
 
 **Before first run:** Enable Cost Explorer once (Billing → Cost Explorer → click "Enable Cost Explorer" if prompted) and activate the Project cost allocation tag (Billing → Cost allocation tags → find `Project` → **Activate**). Tags take ~24 h to start collecting data.
 
+**Why Fargate only shows under the tag after the final wave:** ECS tasks are billed as their own resources and carry no tags unless the service copies them. `compute.tf` now sets `propagate_tags = "SERVICE"` and `enable_ecs_managed_tags = true` on every `aws_ecs_service`, so tasks launched after that change inherit `Project=nextagency-demo` from the service (which gets it from the provider's `default_tags`). Tasks that were already running keep their empty tag set until they are replaced (`update-service --force-new-deployment`); Fargate hours before that point appear only in `--untagged` mode.
+
 ## Destroy order
 
 1. **Destroy production infrastructure first**
@@ -56,13 +58,14 @@ These **do** get deleted even though they appear separate:
 - **ECR images** → deleted immediately because `force_delete = true` on each repository
 - **CloudWatch log groups** → deleted immediately (managed by Terraform)
 - **Secrets Manager secrets** → deleted immediately (`recovery_window_in_days = 0`)
-- **ElastiCache data** → deleted immediately (backup disabled in config)
+- **ElastiCache data** → deleted immediately (no `final_snapshot_identifier` on the replication group, so destroy takes no snapshot)
+- **ECS task-definition revisions** → survive: `terraform destroy` deregisters only the revisions it created (`:1`); the ones `deploy.sh` registered stay `ACTIVE` in the account. They are metadata, cost nothing, and can be deregistered by hand (`aws ecs deregister-task-definition`) or left alone
 
 For explanation of what survives in the real NextAgency production stack, see [AWS-ECS-FARGATE-GUIDE.md §12](./AWS-ECS-FARGATE-GUIDE.md#12-mapping-back-to-nextagencys-real-terraform).
 
 ## Prove nothing is left: verification checklist
 
-After `terraform destroy`, run these three CLI checks (all should print `[]`):
+After `terraform destroy`, run these three CLI checks (`list-clusters` prints `{"clusterArns": []}`; the other two print `[]`):
 
 ```bash
 export AWS_PROFILE=personal AWS_REGION=us-east-1

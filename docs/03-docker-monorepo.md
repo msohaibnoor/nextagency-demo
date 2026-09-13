@@ -84,7 +84,11 @@ container starts. Setting `API_URL` at runtime only (the compose file's
 `environment:` block, matching how `api`/`worker` get `REDIS_URL`) has no
 effect on the proxy. `Dockerfile.web` instead sets `API_URL` as a build-time
 `ARG`/`ENV` (defaulting to `http://api:4000`, the in-network hostname)
-right before the `turbo run build --filter=web...` step.
+right before the `turbo run build --filter=web...` step. On Fargate that
+baked rewrite is dead code: the ALB listener rule forwards `/api/*` to the
+api target group before any request reaches the web task, so only the
+server component's own `fetch(\`${API_URL}/api/jobs/stats\`)` (a runtime
+env read) actually uses `API_URL` there.
 
 ## Non-root user
 

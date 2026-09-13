@@ -352,7 +352,9 @@ tab while it runs:
    graceful-shutdown code path from `docs/02-bullmq.md`.
 5. The old deployment disappears; **Events** shows `service api has reached a steady state`.
 
-`aws ecs wait services-stable` returns at step 5. Total: 1–2 minutes.
+`aws ecs wait services-stable` returns at step 5 — but it also returns cleanly after a
+circuit-breaker rollback, so `deploy.sh` then checks the PRIMARY deployment is the new revision and
+`COMPLETED`, and exits 1 otherwise. Total: 1–2 minutes.
 
 Terraform is **not** involved in deploys — `ignore_changes = [task_definition]` on the service tells
 it to leave the revision alone. Terraform owns the *shape*; CI owns the *image*. That's the same
@@ -401,9 +403,14 @@ Flow, in order:
    newer id-pinned format the trust policy's `sub` pattern didn't match yet (see `docs/08-deploy-and-oidc.md`
    part 2 for the fix and why the id-pinned form is the stronger match).
 5. That role can *only* push to the three ECR repos, register task definitions, update the three
-   services, and read Terraform state. It cannot create a VPC, read the Redis secret, or touch
-   anything tagged differently. Check it: IAM → Roles → `nextagency-demo-github-deploy` → Permissions.
-6. The workflow runs the same `deploy.sh` you ran by hand. Actions tab shows three matrix jobs.
+   services, pass the two ECS roles (to `ecs-tasks.amazonaws.com` only) and describe the ALB. It
+   cannot create a VPC or read Terraform state (the state file contains the Redis auth token, which
+   is why an earlier state-read grant was removed). Note it *can* reach the Redis secret indirectly:
+   whoever can deploy a task definition can run code that receives `REDIS_URL` — the trust policy,
+   not the permission list, is what limits that to `main` of this repo. Check it: IAM → Roles →
+   `nextagency-demo-github-deploy` → Permissions.
+6. The workflow runs the same `deploy.sh` you ran by hand — no Terraform step, the script derives
+   names from the account id and `describe-load-balancers`. Actions tab shows three matrix jobs.
 
 Where to see it happened: IAM → Roles → the role → **Last activity**; CloudTrail → Event history →
 filter *Event name* = `AssumeRoleWithWebIdentity`.
@@ -415,7 +422,7 @@ filter *Event name* = `AssumeRoleWithWebIdentity`.
 | Drill | What you do | What the console shows | What you learn |
 |---|---|---|---|
 | Bad deployment | Deploy an api image whose `/api/health` returns 500 | Service → Deployments: new deployment stuck; TG target *unhealthy*; Events: `(service api) (task …) failed container health checks` ×N, then `deployment circuit breaker: rolling back to …:<old revision>`; the old task never stopped, so the site never went down | The circuit breaker + `minimum_healthy 100 %` is your safety net; the ALB never routed to the bad task |
-| Kill the worker mid-batch | `aws ecs stop-task` on the worker task while 200 jobs are queued | Tasks tab: one STOPPED (*reason: drill*), a new one PROVISIONING within seconds; Bull Board: `active` drops to 0 then climbs; some jobs show a `stalled` event and are retried | ECS replaces tasks; BullMQ's stalled-job detection (30 s) re-queues work the dead task held |
+| Kill the worker mid-batch | `aws ecs stop-task` on the worker task while 2000 jobs are queued | Tasks tab: one STOPPED (*reason: drill*), a new one PROVISIONING within seconds; Bull Board: `active` drops to 0 then climbs; no `stalled` events — `stop-task` sends SIGTERM and the worker drains its in-flight jobs before exiting | ECS replaces tasks; the graceful-shutdown path (Nest hooks → `Worker.close()`) hands work back cleanly. To see BullMQ's stalled-job recovery instead, kill PID 1 with `kill -9` (see `docs/09`) |
 | Scale worker to 2 | `update-service --desired-count 2` | Two RUNNING worker tasks in different AZs (ECS spreads them); the rate-limited queue still drains at 5 per 10 s in total | Horizontal scaling is a number; the limiter lives in Redis, so it's global |
 
 ---

@@ -9,15 +9,23 @@ run against the live stack; part 2 (GitHub Actions + OIDC) lands in Phase 11.
 
 One script, three apps (`api` | `worker` | `web`), same shape every time:
 
-1. Read `terraform output` for the ECR repo URL, cluster name, service name,
-   and ALB DNS — never hardcode account/region-specific values in the script.
+1. Derive the ECR repo URL, cluster name, service name and ALB DNS from
+   `aws sts get-caller-identity` (account id), the stack's fixed names
+   (`nextagency-demo`, `nextagency-demo/<app>`) and
+   `aws elbv2 describe-load-balancers --names nextagency-demo`. An earlier
+   version ran `terraform output` here; that was removed in the final wave
+   because it forced the CI role to read Terraform state (see part 2).
 2. `docker login` to ECR, `docker buildx build --push` a tagged image
    (git short SHA by default, plus `:latest`).
 3. `describe-task-definition` the service's *current* task definition,
    `jq` in the new image, strip the fields AWS adds back on read that
    `register-task-definition` rejects, and register a new revision.
 4. `update-service` to point at the new revision, then
-   `aws ecs wait services-stable`.
+   `aws ecs wait services-stable`, then confirm the `PRIMARY` deployment is
+   the new revision with `rolloutState == COMPLETED` — `services-stable`
+   also returns 0 after a circuit-breaker rollback (Drill 1 in `docs/09`
+   caught this), so the script now prints the last five service events and
+   exits 1 in that case.
 
 ### Platform: `linux/amd64`, not `arm64`
 
@@ -145,7 +153,11 @@ more introductory level; this note has the actual incident and the
 ## The four deploy steps, as AWS/registry API calls
 
 `.github/workflows/deploy.yml` runs `scripts/deploy.sh <app> <sha>` once per
-matrix leg (`api`, `worker`, `web`), which is four calls in sequence:
+matrix leg (`api`, `worker`, `web`). There is no Terraform in the job any
+more — the workflow is checkout → buildx → OIDC credentials → `deploy.sh`.
+The script starts with two cheap reads (`sts:GetCallerIdentity` for the
+account id, `elasticloadbalancing:DescribeLoadBalancers` for the ALB DNS
+name it prints at the end) and then makes four calls in sequence:
 
 1. **`ecr:GetAuthorizationToken`** — `aws ecr get-login-password`, piped into
    `docker login`. Gets a 12-hour bearer token for the account's ECR
@@ -198,8 +210,8 @@ task-definition revision instead buys two things `:latest` cannot:
    repo/branch that triggered the run.
 3. The action calls **`sts:AssumeRoleWithWebIdentity`** with that JWT and
    the role ARN from the `AWS_DEPLOY_ROLE_ARN` repo secret (the ARN itself
-   isn't sensitive — it's an OIDC audience, not a credential — but a secret
-   keeps it out of the workflow file so it isn't hardcoded per-repo).
+   isn't sensitive — it's a non-secret identifier, not a credential — but a
+   secret keeps it out of the workflow file so it isn't hardcoded per-repo).
 4. AWS's STS validates the JWT's signature against the OIDC provider
    registered in Phase 8 (`token.actions.githubusercontent.com`), then
    evaluates the role's **trust policy**: does `aud` equal
@@ -244,31 +256,34 @@ format at some point in 2026 to embed the numeric owner id and repository
 id alongside their names (`owner@id/repo@id`), and the trust policy
 predated that change.
 
-**Fix**: `StringLike` accepts a *list* of patterns, evaluated as OR, so
-`infra/production/cicd.tf` now allows both forms instead of picking one:
+**First fix (superseded)**: `StringLike` accepts a *list* of patterns,
+evaluated as OR, so the trust policy briefly allowed the classic form plus
+`repo:owner@*/name@*:ref:…`. That unblocked CI, but the final review pointed
+out that it is *not* stronger than the name-only form: IAM's `*` matches
+anything in that segment, so `owner@*` is exactly as strict as `owner` — the
+ids were being ignored.
+
+**Current form** (`infra/production/cicd.tf`): the two numeric ids from the
+CloudTrail event are pinned via variables, with the classic form kept as
+the second entry:
 
 ```hcl
+variable "github_owner_id" { default = "73883272" }
+variable "github_repo_id"  { default = "1367206627" }
+
 locals {
-  github_owner = split("/", var.github_repo)[0]
-  github_name  = split("/", var.github_repo)[1]
-  # GitHub's OIDC `sub` may be the classic `repo:owner/name:ref:…` or, since 2026, `repo:owner@<id>/name@<id>:ref:…`.
   github_subs = [
+    "repo:${local.github_owner}@${var.github_owner_id}/${local.github_name}@${var.github_repo_id}:ref:refs/heads/${var.github_branch}",
     "repo:${var.github_repo}:ref:refs/heads/${var.github_branch}",
-    "repo:${local.github_owner}@*/${local.github_name}@*:ref:refs/heads/${var.github_branch}",
   ]
 }
 ```
-with `StringLike = { "...:sub" = local.github_subs }`.
 
-**Why the id-pinned form is actually stronger, not a loosening**: the `@*`
-wildcard only ever matches the numeric id segment — `owner` and `name`
-either side of it are still literal, so this doesn't open the door to any
-other repo. GitHub's id-pinned `sub` is *more* specific than the name-only
-form: repo and org names can be renamed and reused by a different entity,
-but the numeric ids are permanent, so matching on `owner@<id>` (once GitHub
-is fully on this format) is actually a tighter binding than matching on
-`owner` alone. Keeping both patterns here is a compatibility bridge, not a
-weakening.
+**Why pinning the ids is what adds strength**: repo and org names can be
+renamed and later re-registered by a different entity; the numeric ids are
+permanent. A `sub` that carries `owner@73883272/name@1367206627` can only
+have been minted for *this* repository, whatever it is called by then. The
+classic entry remains only for a token minted in the old shape.
 
 ## Why `sub` is pinned to `main`
 
@@ -291,14 +306,39 @@ From `infra/production/cicd.tf`'s `aws_iam_role_policy.github_deploy`:
 | `ecr:BatchCheckLayerAvailability`, `CompleteLayerUpload`, `InitiateLayerUpload`, `PutImage`, `UploadLayerPart`, `BatchGetImage`, `GetDownloadUrlForLayer` | the 3 app ECR repos | Push (and, if needed, pull) images |
 | `ecs:UpdateService`, `ecs:DescribeServices` | the 3 app services | Roll a new revision out, wait for stability |
 | `ecs:DescribeTaskDefinition`, `ecs:RegisterTaskDefinition` | `*` (ECS doesn't support resource-level scoping here) | Read the current task def, register the patched one |
-| `iam:PassRole` | the execution role + task role ARNs only | Let ECS launch tasks with those two roles, and nothing else |
-| `s3:GetObject`, `s3:ListBucket`, `s3:GetBucketVersioning` | the tfstate bucket + its `production/*` key | `deploy.sh` runs `terraform output` to read the ECR/cluster/service/ALB values, which needs the backend to read state |
-| `dynamodb:GetItem`, `PutItem`, `DeleteItem`, `DescribeTable` | the `nextagency-demo-tflock` table | Same read: Terraform's S3 backend takes (and releases) a state lock via this table during `terraform init`/`output`, and calls `DescribeTable` to validate the table's schema (partition key `LockID`) before it will use it — without this action, `terraform init` fails even though no read/write ever needed it |
+| `iam:PassRole` | the execution role + task role ARNs, with `iam:PassedToService = ecs-tasks.amazonaws.com` | Let ECS (and only ECS) launch tasks with those two roles |
+| `elasticloadbalancing:DescribeLoadBalancers` | `*` (no resource-level scoping for Describe) | `deploy.sh` looks up the ALB DNS name for its final line |
 
-Nothing in this list can touch the VPC, the ALB, IAM roles/policies
-themselves, Secrets Manager, or ElastiCache — a compromised workflow run
-could redeploy bad app code, but not exfiltrate the Redis credential or
-change network/security configuration.
+`sts:GetCallerIdentity` is also called (for the account id) but needs no
+policy — it is always allowed.
+
+### The state-read episode, and what the role really cannot do
+
+This table used to have two more rows. `deploy.sh` originally ran
+`terraform output` to look up the ECR/cluster/service/ALB values, which
+made the CI role need `s3:GetObject`/`ListBucket`/`GetBucketVersioning` on
+the state bucket and `dynamodb:GetItem`/`PutItem`/`DeleteItem` on the lock
+table. The first CI run then failed inside `terraform init` because the S3
+backend also calls `dynamodb:DescribeTable` to validate the lock table's
+schema before it will use it, so that action was granted too. The lesson
+came at the final review: a Terraform state file holds every attribute of
+every resource in plaintext, including `random_password.redis_auth` and the
+`rediss://:<token>@…` secret version — so "read state" *is* "read the
+Redis credential". We granted, then realised what state contains, then
+removed the grant; the script now derives those values without Terraform,
+and the workflow no longer installs it.
+
+Even without the state grant, the honest statement is narrower than "cannot
+read the Redis secret". The role cannot call `secretsmanager:GetSecretValue`
+directly, but `RegisterTaskDefinition` + `PassRole` + `UpdateService` lets a
+workflow run register a task definition with arbitrary image and command,
+and ECS injects `REDIS_URL` into that container from Secrets Manager. Any
+code that can deploy can read whatever the deployed task is given. The
+PassRole condition and the fixed execution/task roles bound *which* roles
+that code runs as; the trust policy above (only `main` of this exact repo)
+is the real boundary on *who* can deploy. What the role genuinely cannot
+do is change the shape of the stack: no VPC, ALB, security-group, IAM or
+ElastiCache permissions, and no Terraform state to read or lock.
 
 ## `ignore_changes = [task_definition]`
 
