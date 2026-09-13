@@ -18,9 +18,9 @@ and the route table *is* the tier's identity — not a tag, a routing fact:
 | private-data | `10.40.20.0/24`, `10.40.21.0/24` | `aws_route_table.data` | none |
 
 Only the public route table's association gives a subnet a real path to the
-internet as a *destination*: an Internet Gateway is stateful in neither
-direction — anything with a public IP in a public subnet can be reached from,
-and reach, the internet directly.
+internet as a *destination*: an IGW does no connection tracking; a NAT
+gateway does — anything with a public IP in a public subnet can be reached
+from, and reach, the internet directly.
 
 ## Why the data tier has no default route
 
@@ -88,11 +88,13 @@ nothing but the LB tier is dual-homed.
 
 The subnet table above is exactly what account `472408435328` created on
 2026-09-13, confirmed via `aws ec2 describe-subnets` after the fact — the
-CIDR math and the reality matched with no surprises. The NAT gateway
-(`nat-0a5b69a66529fb23f`) took 1m37s to reach `available`, the slowest
-network-tier resource but still well under the ElastiCache replication
-group's 4m42s (see `06-ecs-fargate-roles-and-tasks.md`'s "This apply's real
-values"). The api and web tasks that ended up running in the private-app
-tier landed at `10.40.10.90` (us-east-1a) and `10.40.11.181` (us-east-1b) —
-one per AZ, each inside the `/24` its AZ's subnet carved out, exactly as the
-`cidrsubnet` math above predicts.
+CIDR math and the reality matched with no surprises. The NAT gateway took
+1m37s to reach `available` per the apply log, the slowest network-tier
+resource but still well under the ElastiCache replication group's 4m42s
+(see `06-ecs-fargate-roles-and-tasks.md`'s "This apply's real values").
+Its id, confirmed after the fact with
+`aws ec2 describe-nat-gateways --filter Name=state,Values=available --query 'NatGateways[].NatGatewayId'`:
+`["nat-0a5b69a66529fb23f"]`. The api and web tasks that ended up running in
+the private-app tier landed at `10.40.10.90` (us-east-1a) and
+`10.40.11.181` (us-east-1b) — one per AZ, each inside the `/24` its AZ's
+subnet carved out, exactly as the `cidrsubnet` math above predicts.

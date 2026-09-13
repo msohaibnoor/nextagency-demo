@@ -82,11 +82,22 @@ This is the first real apply against account `472408435328` (2026-09-13).
   `ResourceInitializationError: … unable to retrieve secret … ResourceNotFoundException:
   … can't find the specified secret value for staging label: AWSCURRENT` —
   Secrets Manager's `AWSCURRENT` label on the just-created `redis_url`
-  secret version hadn't propagated yet when the execution role first tried
-  to resolve it. ECS retried automatically and the third attempt succeeded
-  about a minute later, with no Terraform or code changes needed. This is
-  exactly the scenario the hardening commit's `depends_on` addition targets
-  — the dependency documents intent (roles fully in place before the
-  service starts) but can't wait out IAM/Secrets Manager's own eventual
-  consistency, so ECS's own retry-and-replace behavior is what actually
-  resolves it.
+  secret *version* (`aws_secretsmanager_secret_version.redis_url`) hadn't
+  propagated yet when the execution role first tried to resolve it. ECS
+  retried automatically and the third attempt succeeded about a minute
+  later, with no Terraform or code changes needed.
+
+  This is **not** the scenario the hardening commit's `depends_on` addition
+  targets. That addition orders the services after the execution role's IAM
+  policies (`aws_iam_role_policy.execution_secrets`,
+  `aws_iam_role_policy_attachment.execution_managed`) — it makes sure the
+  role's *permissions* are attached before a task tries to use them, which
+  is an IAM-propagation concern. The secret version that raced here is a
+  different resource entirely and isn't in that `depends_on` list, so
+  Terraform can (and did) create it and the services in parallel. The two
+  problems look similar — both are "AWS eventual consistency after create"
+  — but the hardening commit only closes the IAM one; the secret-version
+  race that actually happened here was absorbed by ECS's own placement
+  retry, not by anything in the HCL. See the report's concerns for whether
+  `aws_secretsmanager_secret_version.redis_url` should be added to the
+  service `depends_on` in a follow-up.

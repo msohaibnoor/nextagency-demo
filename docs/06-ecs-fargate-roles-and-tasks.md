@@ -113,6 +113,13 @@ working task definition revision. Without it, a bad deploy can burn cycles
 `0/1` — with it, ECS gives up after a bounded number of attempts and returns
 you to a known-good state on its own.
 
+Caveat: rollback needs a *previous completed deployment* to roll back to.
+On a service's very first deployment — task definition revision `:1`, as in
+this apply — there is no earlier good revision, so a tripped breaker simply
+marks the deployment `FAILED` and leaves the service at 0 running tasks;
+"automatic rollback" only starts protecting you from the second deployment
+onward.
+
 ## Why `ignore_changes = [task_definition]`
 
 The service's `lifecycle { ignore_changes = [task_definition] }` exists
@@ -133,9 +140,21 @@ pipeline owns releases, and neither fights the other for the same field.
 `terraform apply` (52 resources) ran 5m27s, ElastiCache the long pole at
 4m42s. `api`/`web` tasks (`10.40.10.90`, `10.40.11.181`) passed their target
 health checks on the first poll — `health_check_grace_period_seconds = 60`
-wasn't even needed this time, but it's there for a slower cold start. The
-`worker` task (`10.40.10.188`, no target group) is where the hardening
-commit's `depends_on` addition actually got exercised: its first two
-placements failed on a Secrets Manager `AWSCURRENT` propagation race, and
-ECS's own retry placed it successfully on the third attempt about a minute
-later — full detail in `07-alb-routing.md`'s matching section.
+wasn't even needed this time, but it's there for a slower cold start.
+
+The hardening commit's `depends_on` addition (`aws_iam_role_policy.execution_secrets`,
+`aws_iam_role_policy_attachment.execution_managed`) orders the services after
+the execution role's *IAM policies* — it guarantees the role can already
+read the secret and pull images by the time a task tries to start, closing
+an IAM-propagation race. It does **not** order the services after
+`aws_secretsmanager_secret_version.redis_url` — that resource isn't in the
+`depends_on` list, so Terraform is free to create it and the services
+concurrently. That's a separate resource with its own propagation delay,
+and it's what the `worker` task (`10.40.10.188`, no target group) actually
+hit: its first two placements failed on a Secrets Manager `AWSCURRENT`
+label race on that secret *version* (detail in `07-alb-routing.md`'s
+matching section), not on the IAM policies the hardening commit covers.
+ECS's own placement retry absorbed it, succeeding on the third attempt
+about a minute later, with no HCL change needed. Whether
+`aws_secretsmanager_secret_version.redis_url` belongs in the service
+`depends_on` too is a fair follow-up — see the report's concerns.

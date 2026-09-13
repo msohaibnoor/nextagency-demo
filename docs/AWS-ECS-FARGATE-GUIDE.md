@@ -164,7 +164,7 @@ takes up to 24 h to start collecting, which is why you do it now.
 | **Execution role** | IAM role the *ECS agent* uses to **start** your task: pull from ECR, read the secret, write logs. Your code never uses it. | The IAM instance profile your EC2 had, but only for bootstrapping |
 | **Task role** | IAM role your **application code** assumes at runtime (if it calls AWS APIs). Ours only grants ECS Exec (SSM) permissions because the app talks to Redis, not AWS. | The instance profile again, but for the app. Separating the two is the point. |
 | **ECS Exec** | `aws ecs execute-command` → an interactive shell inside a running task, tunnelled through SSM. | `ssh` into the box + `docker exec` |
-| **Deployment circuit breaker** | If a new task definition's tasks keep failing health checks, ECS gives up and rolls the service back to the previous revision automatically. | Your manual "oh no, redeploy the old one" |
+| **Deployment circuit breaker** | If a new task definition's tasks keep failing health checks, ECS gives up and rolls the service back to the previous revision automatically — except on a service's very first deployment, where there is no previous revision to roll back to and a tripped breaker just leaves the service at 0 running tasks. | Your manual "oh no, redeploy the old one" |
 
 ### Data & secrets
 
