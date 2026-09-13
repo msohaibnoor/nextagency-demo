@@ -1,0 +1,2 @@
+github_repo              = "msohaibnoor/nextagency-demo"
+github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
