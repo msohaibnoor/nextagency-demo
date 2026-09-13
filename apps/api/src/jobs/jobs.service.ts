@@ -10,16 +10,16 @@ export const REPORT_FLOW = "report-flow";
 
 @Injectable()
 export class JobsService {
+  private readonly byName: Record<QueueName, Queue>;
+
   constructor(
     @InjectQueue(QUEUES.renewalReminders) private readonly reminders: Queue<RenewalReminderJob>,
     @InjectQueue(QUEUES.reports) private readonly reports: Queue,
     @InjectQueue(QUEUES.nightlySweep) private readonly sweep: Queue,
     @InjectQueue(QUEUES.rateLimitedSync) private readonly sync: Queue<RateLimitedSyncJob>,
     @InjectFlowProducer(REPORT_FLOW) private readonly flow: FlowProducer,
-  ) {}
-
-  private byName(): Record<QueueName, Queue> {
-    return {
+  ) {
+    this.byName = {
       [QUEUES.renewalReminders]: this.reminders as Queue,
       [QUEUES.reports]: this.reports,
       [QUEUES.nightlySweep]: this.sweep,
@@ -49,13 +49,14 @@ export class JobsService {
   async report({ agencyId = "agency-1", month = new Date().toISOString().slice(0, 7) }: ReportDto): Promise<string> {
     const base: ReportJob = { agencyId, month };
     const q = QUEUES.reports;
+    const opts = { removeOnComplete: 20 }; // keep the last 20 of each node, not every report ever run
     const tree = await this.flow.add({
-      name: "report", queueName: q, data: base,
+      name: "report", queueName: q, data: base, opts,
       children: [{
-        name: "email", queueName: q, data: { ...base, step: "email" },
+        name: "email", queueName: q, data: { ...base, step: "email" }, opts,
         children: [{
-          name: "render", queueName: q, data: { ...base, step: "render" },
-          children: [{ name: "gather", queueName: q, data: { ...base, step: "gather" } }],
+          name: "render", queueName: q, data: { ...base, step: "render" }, opts,
+          children: [{ name: "gather", queueName: q, data: { ...base, step: "gather" }, opts }],
         }],
       }],
     });
@@ -64,13 +65,13 @@ export class JobsService {
 
   async stats() {
     const entries = await Promise.all(
-      ALL_QUEUES.map(async (name) => [name, await this.byName()[name].getJobCounts()] as const),
+      ALL_QUEUES.map(async (name) => [name, await this.byName[name].getJobCounts()] as const),
     );
     return Object.fromEntries(entries) as Record<QueueName, Awaited<ReturnType<Queue["getJobCounts"]>>>;
   }
 
   async get(queue: QueueName, id: string) {
-    const q = this.byName()[queue];
+    const q = this.byName[queue];
     if (!q) return null;
     const job = await q.getJob(id);
     if (!job) return null;
@@ -81,6 +82,10 @@ export class JobsService {
   }
 
   async ensureSweepScheduler() {
-    await this.sweep.upsertJobScheduler("nightly-sweep", { pattern: "*/5 * * * *" }, { name: "sweep", data: {} });
+    await this.sweep.upsertJobScheduler(
+      "nightly-sweep",
+      { pattern: "*/5 * * * *" },
+      { name: "sweep", data: {}, opts: { removeOnComplete: 20 } }, // template: every produced job keeps only the last 20
+    );
   }
 }

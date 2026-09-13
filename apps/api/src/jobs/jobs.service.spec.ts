@@ -44,6 +44,21 @@ describe("JobsService", () => {
     expect(tree.children[0].children[0].children[0].name).toBe("gather");
   });
 
+  it("bounds retention on every node of the report flow", async () => {
+    await svc.report({ agencyId: "a1", month: "2026-09" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tree = (flow.add.mock.calls as any[][])[0][0];
+    const email = tree.children[0], render = email.children[0], gather = render.children[0];
+    for (const node of [tree, email, render, gather]) expect(node.opts).toEqual({ removeOnComplete: 20 });
+  });
+
+  it("registers the sweep scheduler with a bounded-retention template", async () => {
+    await svc.ensureSweepScheduler();
+    expect(sweep.upsertJobScheduler).toHaveBeenCalledWith(
+      "nightly-sweep", { pattern: "*/5 * * * *" }, { name: "sweep", data: {}, opts: { removeOnComplete: 20 } },
+    );
+  });
+
   it("returns stats keyed by queue name", async () => {
     const s = await svc.stats();
     expect(Object.keys(s).sort()).toEqual(["nightly-sweep", "rate-limited-sync", "renewal-reminders", "reports"]);
