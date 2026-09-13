@@ -26,7 +26,23 @@ resource "aws_iam_role_policy" "github_deploy" {
       Resource = [for r in aws_ecr_repository.app : r.arn] },
       { Effect = "Allow", Action = ["ecs:UpdateService", "ecs:DescribeServices"], Resource = [for s in aws_ecs_service.app : s.id] },
       { Effect = "Allow", Action = ["ecs:DescribeTaskDefinition", "ecs:RegisterTaskDefinition"], Resource = "*" },
-      { Effect = "Allow", Action = ["iam:PassRole"], Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn] }
+      { Effect = "Allow", Action = ["iam:PassRole"], Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn] },
+      {
+        # deploy.sh runs `terraform output` from infra/production, which reads the
+        # S3-backed state and briefly locks it via DynamoDB. GetBucketVersioning is
+        # added alongside ListBucket because Terraform's S3 backend calls it on init.
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:ListBucket", "s3:GetBucketVersioning"]
+        Resource = [
+          "arn:aws:s3:::nextagency-demo-tfstate-${data.aws_caller_identity.current.account_id}",
+          "arn:aws:s3:::nextagency-demo-tfstate-${data.aws_caller_identity.current.account_id}/production/*"
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
+        Resource = "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/nextagency-demo-tflock"
+      }
     ]
   })
 }
