@@ -1,3 +1,13 @@
+locals {
+  github_owner = split("/", var.github_repo)[0]
+  github_name  = split("/", var.github_repo)[1]
+  # GitHub's OIDC `sub` may be the classic `repo:owner/name:ref:…` or, since 2026, `repo:owner@<id>/name@<id>:ref:…`.
+  github_subs = [
+    "repo:${var.github_repo}:ref:refs/heads/${var.github_branch}",
+    "repo:${local.github_owner}@*/${local.github_name}@*:ref:refs/heads/${var.github_branch}",
+  ]
+}
+
 resource "aws_iam_role" "github_deploy" {
   name = "${local.name}-github-deploy"
   assume_role_policy = jsonencode({
@@ -8,7 +18,7 @@ resource "aws_iam_role" "github_deploy" {
       Principal = { Federated = var.github_oidc_provider_arn }
       Condition = {
         StringEquals = { "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com" }
-        StringLike   = { "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/${var.github_branch}" }
+        StringLike   = { "token.actions.githubusercontent.com:sub" = local.github_subs }
       }
     }]
   })
