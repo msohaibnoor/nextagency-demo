@@ -47,12 +47,13 @@ up:
 ```
 
 Timeline (from the `describe-services` snapshots polled every ~20s during
-the drill; see the report's evidence appendix for the raw lines):
-`update-service` creates the `:4` deployment at 15:45:51 → task 1
+the drill; see the report's evidence appendix for the raw lines): first
+snapshot showing the `:4` deployment already `IN_PROGRESS` 15:46:01 → task 1
 (`c9beb1b8…`) first shown unhealthy 15:47:52 → task 2 (`fe8a0562…`) 15:51:39
 → task 3 (`fb1a36d8…`) 15:55:04 → circuit breaker fires ("deployment failed:
 tasks failed to start" / "rolling back to deployment …") 15:55:49 →
-rollback `rolloutState: COMPLETED` on `api:3` at 15:56:13. **~10m22s** end to
+rollback `rolloutState: COMPLETED` on `api:3` at 15:56:13. **≈10 minutes**
+(15:46:01 → 15:56:13, ~10m12s between the two evidenced endpoints) end to
 end — longer than "3 × 45s" because each of the three attempts also carries
 the 60s `health_check_grace_period_seconds` (ECS won't act on a failing
 health check until a newly-started task clears its grace window) plus
