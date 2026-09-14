@@ -105,4 +105,12 @@ Record the real cost here after running `scripts/cost-check.sh` a day after dest
 
 | Estimate | Actual | Notes |
 |---|---|---|
-| ≈ $3.40/day × runtime | — | Fill in 24 h after destroy; expect ≈ $10–$15 for 2–3 days of runtime |
+| ≈ $3.40/day × runtime | *(fill in ~2026-09-16 with `scripts/cost-check.sh`)* | Stack ran 2026-09-13 ≈ 10:00 → 2026-09-15 (≈ 2 days) → expect ≈ $7–8. At destroy time the tag-filtered report still showed $0 (Cost Explorer lag + `Project` tag activated late); the untagged same-day view showed EC2-Other (NAT) $0.18, ECS $0.15, ELB $0.09, VPC $0.06, ElastiCache $0.03 for the partial final day |
+
+### What the destroy actually looked like (2026-09-15)
+
+- `terraform plan -destroy` → `Plan: 0 to add, 0 to change, 55 to destroy` (same 55 the first apply added).
+- `terraform apply destroy.tfplan` → **8 min 28 s**. ElastiCache and the NAT gateway were the slow ones.
+- Verified afterwards: `terraform state list` → 0 entries; no NAT gateways *available*, no replication groups, no load balancers, no ECS clusters, no VPC tagged `Project`, no ECR repos, no secrets, no `/ecs/nextagency-demo/*` log groups, no `nextagency-demo-*` roles.
+- The Resource Groups tag search still listed a handful of ARNs for ~an hour: the NAT (state `deleted`), the cluster/services/tasks (`INACTIVE`), and task-definition revisions (`INACTIVE`, kept forever, free). That index lags; the direct `describe-*` calls are the truth.
+- Bootstrap (state bucket, lock table, budget, OIDC provider) was **kept**, so a rebuild is `terraform apply` in `production/` plus the image pushes in Task 9.6's order.
