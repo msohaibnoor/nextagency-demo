@@ -113,4 +113,8 @@ Record the real cost here after running `scripts/cost-check.sh` a day after dest
 - `terraform apply destroy.tfplan` → **8 min 28 s**. ElastiCache and the NAT gateway were the slow ones.
 - Verified afterwards: `terraform state list` → 0 entries; no NAT gateways *available*, no replication groups, no load balancers, no ECS clusters, no VPC tagged `Project`, no ECR repos, no secrets, no `/ecs/nextagency-demo/*` log groups, no `nextagency-demo-*` roles.
 - The Resource Groups tag search still listed a handful of ARNs for ~an hour: the NAT (state `deleted`), the cluster/services/tasks (`INACTIVE`), and task-definition revisions (`INACTIVE`, kept forever, free). That index lags; the direct `describe-*` calls are the truth.
+- Two things `terraform destroy` cannot remove because Terraform never created them — clean them by hand:
+  - task-definition revisions registered by `deploy.sh`/CI (`:2`…`:6`) stay `ACTIVE` (free):
+    `for td in $(aws ecs list-task-definitions --status ACTIVE --query taskDefinitionArns --output text); do aws ecs deregister-task-definition --task-definition $td; done`
+  - the Container Insights log group ECS creates on its own: `aws logs delete-log-group --log-group-name /aws/ecs/containerinsights/nextagency-demo/performance`
 - Bootstrap (state bucket, lock table, budget, OIDC provider) was **kept**, so a rebuild is `terraform apply` in `production/` plus the image pushes in Task 9.6's order.
